@@ -1,151 +1,4 @@
-let parseSingleLineComment = function(str){
-    if(str.length < 2)return false;
-    if(str.slice(0,2) !== "//")return false;
-    for(let i = 2; i < str.length; i++){
-        if(str[i] === "\n"){
-            return [str.slice(i),str.slice(0,i)];
-        }
-    }
-    return ["",str];
-};
-
-let parseError;
-
-const parseMultiLineComment = function(str){
-    if(str.length < 4)return false;
-    if(str.slice(0,2) !== "/*")return false;
-    for(let i = 2; i < str.length-1; i++){
-        if(str.slice(i,i+2) === "*/"){
-            return [str.slice(i+1),str.slice(0,i+1)];
-        }
-    }
-    // should throw an error, but doesnt matter
-    return ["",str];
-}
-
-const parseSpaceChars = function(str){
-    for(let i = 0; i < str.length; i++){
-        const c = str[i];
-        if(c === " " || c === "\t" || c === "\r" || c === "\n")continue;
-        if(i === 0)return false;
-        return [str.slice(i),str.slice(0,i)];
-    }
-    return ["",str];
-}
-
-let parseSpace = function(str){
-    while(str !== ""){
-        let it;
-        if(it = parseSpaceChars(str)){
-            str = it[0];
-        }else if(it = parseSingleLineComment(str)){
-            str = it[0];
-        }else if(it = parseMultiLineComment(str)){
-            str = it[0];
-        }else{
-            return str;
-        }
-    }
-    return "";
-}
-
-let parseSpaceStrict = function(str){
-    let it;
-    while(str.length !== 0){
-        if(it = parseSpaceChars(str)){
-            str = it[0];
-        }else if(it = parseSingleLineComment(str)){
-            str = it[0];
-        }else if(it = parseMultiLineComment(str)){
-            str = it[0];
-        }else{
-            if(it)return str;
-            return false;
-        }
-    }
-    if(it)return "";
-    return false;
-}
-
-let matchSlice = function(str,pat){
-    return normalizeParser(pat)(str);
-}
-
-const normalizeParser = function(parser){
-    if(typeof parser === "string"){
-        return (str)=>{
-            str = parseSpace(str);
-            if(!str.startsWith(parser))return false;
-            return [str.slice(parser.length),parser];
-        }
-    }else if(parser instanceof RegExp){
-        return (str)=>{
-            str = parseSpace(str);
-            let match = str.match(parser);
-            if(!match)return false;
-            match = match[0];
-            return [str.slice(match.length),match];
-        }
-    }
-    return parser;
-};
-
-const parseRepeats = function(start,separator,end,matcher){
-    return (str)=>{
-        matcher = normalizeParser(matcher);
-        let res = [];
-        let it;
-        if(!(it = matchSlice(str,start)))return false;
-        [str] = it;
-        let nosep = false;
-        while(str !== ""){
-            if(!(it = matcher(str)))break;
-            if(nosep)return false;
-            let match;
-            [str,match] = it;
-            if(it = matchSlice(str,separator)){
-                [str] = it;
-            }else{
-                nosep = true;
-            }
-            res.push(match);
-        }
-        if(!(it = matchSlice(str,end)))return false;
-        [str] = it;
-        return [str,res];
-    };
-};
-
-const or = function(...parsers){
-    return (str)=>{
-        for(let parser of parsers){
-            let it;
-            if(it = normalizeParser(parser)(str))return it;
-        }
-        return false;
-    }
-};
-
-
-const seq = function(...parsers){
-    return (str)=>{
-        let res = [];
-        for(let parser of parsers){
-            let it;
-            if(!(it = normalizeParser(parser)(str)))return false;
-            let r;
-            [str,r] = it;
-            res.push(r);
-        }
-        return [str,res];
-    }
-};
-
-const wrap = function(fn,...args){
-    return (str)=>{
-        return fn(str,...args)
-    }
-};
+import {parser, AST, Scope, pattern, parserOutput, consumeSpace, getParser, or, seq, listLike} from "./parserUtil";
 
 const reg = {
     id: /^[A-Za-z_][A-Za-z0-9_]*/,
@@ -153,14 +6,15 @@ const reg = {
     op: /^(\+|\-|\*|\/|%|\+=|\-=|\*=|\/=|%=|\*\*=|==|===|!=|!==|>|<|>=|<=|&&|\|\||!|&|\||\^|~|<<|>>|>>>|\?|:)/,
 }
 
-const parseTupleDefinition = function(str){
-    let it = parseRepeats("(",",",")",(str)=>{
-        let it;
+
+const parseTupleDefinition: parser<tupleTypedef> = function(str){
+    let it = listLike("(",",",")",(str)=>{
+        let it: any;
         if(!(it = parseTypeDefinition(str)))return false;
         let typedef;
         [str,typedef] = it;
         let slot = [typedef,null];
-        if(it = matchSlice(str,reg.id)){
+        if(it = getParser(reg.id)(str)){
             let typename;
             [str,typename] = it;
             slot[1] = typename;
@@ -176,17 +30,42 @@ const parseTupleDefinition = function(str){
     }];
 };
 
-const parseTypeDefinition = function(str){
-    let it;
-    it = or(
+type tupleTypedef = {
+    type: "tupleTypedef";
+    items: any[];// revise
+}
+
+type aliasTypedef = {
+    type: "aliasTypedef";
+    name: string;
+    tempargs: typedef[] | null;
+}
+
+type arrayTypedef = {
+    type: "arrayTypedef";
+    size: expression;
+    content: typedef;
+}
+
+type expression = any;//TODO
+
+type typedef = tupleTypedef | aliasTypedef | arrayTypedef;
+
+const getStr = (val: [string, any]) => val[0];
+function getVal<T>(val: [string, T]): T{
+    return val[1];
+}
+
+const parseTypeDefinition: parser<typedef> = function(str){
+    const it = or<parser<aliasTypedef | tupleTypedef>>(
         (str)=>{
-            let it;
-            if(!(it = matchSlice(str,reg.id)))return false;
-            let id;
+            let it: any;
+            if(!(it = getParser(reg.id)(str)))return false;
+            let id: string;
             [str,id] = it;
             // match for template
             let tempargs = null;
-            if(it = parseRepeats("<",",",">",parseTypeDefinition)(str)){
+            if(it = listLike("<",",",">",parseTypeDefinition)(str)){
                 [str,tempargs] = it;
             }
             return [str,{
@@ -201,14 +80,14 @@ const parseTypeDefinition = function(str){
     let typedefMain;
     [str,typedefMain] = it;
     // might be an array
-    if(it = seq(
+    const it2 = seq(
         "[",
         or(reg.int,reg.id),
         "]"
-    )(str)){
-        let r;
-        [str,r] = it;
-        const size = r[1];
+    )(str);
+    if(it2){
+        str = getStr(it2);
+        const size = getVal(it2)[1];
         return [str,{
             type: "arrayTypedef",
             size: size,
@@ -219,7 +98,7 @@ const parseTypeDefinition = function(str){
 };
 
 const parseTypedefStatement = function(str){
-    let it;
+    let it: ReturnType<generalParser>;
     if(!(it = seq("typedef",reg.id,parseTypeDefinition)(str)))return false;
     let id,type,_;
     [str,[_,id,type]] = it;
@@ -231,7 +110,7 @@ const parseTypedefStatement = function(str){
 };
 
 const parseDeclaration = function(str){
-    let it;
+    let it: ReturnType<generalParser>;
     if(!(it=seq(parseTypeDefinition,reg.id)(str)))return false;
     let type,id;
     [str,[type,id]] = it;
@@ -294,7 +173,7 @@ const binaryMatcher = getMatcher(binaries);
 
 
 const parsePrefix = function(str){
-    let it;
+    let it: ReturnType<generalParser>;
     if(it = prefixMatcher(str)){
         let op;
         [str,op] = it;
@@ -308,7 +187,7 @@ const parsePrefix = function(str){
 };
 
 const parsePostfix = function(str){
-    let it;
+    let it: ReturnType<generalParser>;
     if(it = postfixMatcher(str)){
         let op;
         [str,op] = it;
@@ -317,7 +196,7 @@ const parsePostfix = function(str){
             opType: "postfix",
             op: op
         }];
-    }else if(it = parseRepeats("<",",",">",parseTypeDefinition)(str)){
+    }else if(it = listLike("<",",",">",parseTypeDefinition)(str)){
         let args;
         [str,args] = it;
         return [str,{
@@ -326,7 +205,7 @@ const parsePostfix = function(str){
             op: "TEMPL",
             args: args,
         }];
-    }else if(it = parseRepeats("(",",",")",parseExpression)(str)){
+    }else if(it = listLike("(",",",")",parseExpression)(str)){
         let args;
         [str,args] = it;
         return [str,{
@@ -349,7 +228,7 @@ const parsePostfix = function(str){
 };
 
 const parseBinary = function(str){
-    let it;
+    let it: ReturnType<generalParser>;
     if(it = binaryMatcher(str)){
         let op;
         [str,op] = it;
@@ -363,7 +242,7 @@ const parseBinary = function(str){
 }
 
 const parseOperand = function(str){
-    let it;
+    let it: ReturnType<generalParser>;
     if(it = normalizeParser(reg.id)(str)){
         [str,it] = it;
         let value = it;
@@ -455,7 +334,7 @@ const parseExpression = function(str){
     let snapshot = false;
 
     while(state !== 2){
-        let it;
+        let it: ReturnType<generalParser>;
         if(state === "start" || state === "prefix" || state === "binary"){
             let state0 = state;
             if(it = or(parseOperand, parsePrefix)(str)){
@@ -503,7 +382,7 @@ const parseExpression = function(str){
 }
 
 const parseStatement = function(str){
-    let it;
+    let it: ReturnType<generalParser>;
     let macro = false;
     if(!(it = seq(/^#?[A-Za-z_][A-Za-z_0-9]*/)(str)))return false;
     let id;
@@ -550,7 +429,7 @@ const parseStatement = function(str){
 }
 
 const parseScope = function(str){
-    return parseRepeats("{",/^;?/,"}",or(parseStatement,parseExpression,parseDeclaration))(str);
+    return listLike("{",/^;?/,"}",or(parseStatement,parseExpression,parseDeclaration))(str);
 }
 
 const parseFuncDef = function(str){
@@ -558,24 +437,24 @@ const parseFuncDef = function(str){
     if(!(it = parseTypeDefinition(str)))return false;
     [str,rettype] = it;
     // now match the function name
-    if(!(it = matchSlice(str,reg.id)))return false;
+    if(!(it = getParser(reg.id)(str)))return false;
     let funcname;
     [str,funcname] = it;
     let op = null;
     let tempargs = null;
     if(funcname === "operator"){
-        if(!(it = matchSlice(str,reg.op)))return false;
+        if(!(it = getParser(reg.op)(str)))return false;
         [str,op] = it;
-    }else if(it = parseRepeats("<",",",">",reg.id)(str)){
+    }else if(it = listLike("<",",",">",reg.id)(str)){
         [str,tempargs] = it;
     }
     // now parsing arguments
-    if(!(it = parseRepeats("(",",",")",(str)=>{
-        let it;
+    if(!(it = listLike("(",",",")",(str)=>{
+        let it: ReturnType<generalParser>;
         if(!(it = parseTypeDefinition(str)))return false;
         let type;
         [str,type] = it;
-        if(!(it = matchSlice(str,reg.id)))return false;
+        if(!(it = getParser(reg.id)(str)))return false;
         let name;
         [str,name] = it;
         return [str,[type,name]];
@@ -598,7 +477,7 @@ const parseFuncDef = function(str){
 }
 
 export const parseGlobal = function(str){
-    let res = parseRepeats("","",
+    let res = listLike("","",
         ""
         //or(parseSingleLineComment,parseMultiLineComment,parseSpaceChars)
         ,or(parseTypedefStatement,parseFuncDef))(str);
