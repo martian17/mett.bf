@@ -232,18 +232,14 @@ const parseTypedefStatement = function(str){
 
 const parseDeclaration = function(str){
     let it;
-    if(!(it=seq(parseTypeDefinition,reg.id)(str)))return false;
-    let type,id;
-    [str,[type,id]] = it;
-    let _,expr;
-    if(it=seq("=",parseExpression)(str)){
-        [str,[_,expr]] = it;
-    }
+    if(!(it=seq(parseTypeDefinition,reg.id,"=",parseExpression)(str)))return false;
+    let type,id,_,expr;
+    [str,[type,id,_,expr]] = it;
     return [str,{
         type: "vardec",
         vartype: type,
         name: id,
-        expr: expr || null,
+        expr: expr
     }];
 }
 
@@ -259,7 +255,7 @@ po ++ --
 pr ++ -- ! + -
 bl * / %
 bl + -
-bl < > <= >= == !=
+bl < > <= >= == != 
 br = *= /= += -=
 `.trim().split("\n").map((line,i)=>{
     const [type,...ops] = line.split(" ");
@@ -278,7 +274,7 @@ br = *= /= += -=
 });
 
 const getMatcher = function(map){
-    const keys = [...map.keys()].sort((a,b)=>b.length-a.length);
+    const keys = map.keys();
     let regexstrs = [];
     for(let key of keys){
         if(key.match(/^[A-Z]/))continue;
@@ -308,6 +304,7 @@ const parsePrefix = function(str){
 };
 
 const parsePostfix = function(str){
+    console.log(str);
     let it;
     if(it = postfixMatcher(str)){
         let op;
@@ -366,38 +363,38 @@ const parseOperand = function(str){
     let it;
     if(it = normalizeParser(reg.id)(str)){
         [str,it] = it;
-        let value = it;
+        let val = it;
         return [str,{
             type: "id",
-            id: value,
+            id: val,
         }];
     }else if(it = normalizeParser(reg.int)(str)){
         [str,it] = it;
-        let value = it;
+        let val = it;
         return [str,{
             type: "int",
-            value: value,
+            val: val,
         }]
     }else if(it = seq("'",/^(\\'|[^'])+/,"'")(str)){
         [str,it] = it;
-        let value = it[1];
+        let val = it[1];
         return [str,{
             type: "char",
-            value: value,
+            val: val,
         }];
     }else if(it = seq('"',/^(\\"|[^"])+/,'"')(str)){
         [str,it] = it;
-        let value = it[1];
+        let val = it[1];
         return [str,{
             type: "string",
-            value: value,
+            val: val,
         }];
     }else if(it = seq("(",parseExpression,")")(str)){
         [str,it] = it;
-        let value = it[1];
+        let val = it[1];
         return [str,{
             type: "group",
-            value: value,
+            val: val,
         }];
     }else{
         return false;
@@ -415,77 +412,69 @@ const parseExpression = function(str){
     // postfix -> postfix, binary, end
     let state = "start";
     let operators = [];
-    let tokens = [];
+    let operands = [];
 
     const reduceStack = function(p){
         if(operators.length === 0)return;
         const op = operators.at(-1);
         if(op.opType === "prefix"){
             if(prefixes.get(op.op).stackPrecedence < p)return;
-            const operand = tokens.pop();
+            const operand = operands.pop();
             op.value = operand;
             operators.pop();
-            tokens.push(op);
+            operands.push(op);
         }else if(op.opType === "postfix"){
             if(postfixes.get(op.op).stackPrecedence < p)return;
-            const operand = tokens.pop();
+            const operand = operands.pop();
             op.value = operand;
             operators.pop();
-            tokens.push(op);
+            operands.push(op);
         }else if(op.opType === "binary"){
             if(binaries.get(op.op).stackPrecedence < p)return;
-            const right = tokens.pop();
-            const left = tokens.pop();
+            const right = operands.pop();
+            const left = operands.pop();
             op.left = left;
             op.right = right;
             operators.pop();
-            tokens.push(op);
+            operands.push(op);
         }
         reduceStack(p);
     }
 
-    const takeSnapshot = function(){
-        return {
-            str,
-            operators: [...operators],
-            tokens: [...tokens],
-        }
-    }
-
-    let snapshot = false;
-
     while(state !== 2){
+        console.log("!'",str,"'");
         let it;
         if(state === "start" || state === "prefix" || state === "binary"){
             let state0 = state;
             if(it = or(parseOperand, parsePrefix)(str)){
                 let token;
                 [str,token] = it;
+                console.log("!!'",str,"'");
                 if(token.opType === "prefix"){
                     state = "prefix";
                     reduceStack(prefixes.get(token.op).precedence);
                     operators.push(token);
                 }else{
                     state = "operand";
-                    tokens.push(token);
-                    snapshot = takeSnapshot();
+                    operands.push(token);
                 }
             // }else if(state0 === "start"){
             //     break;
             }else{
-                if(!snapshot)return false;
-                ({str,tokens,operators} = snapshot);
-                break;
+                console.log("falsing",str,operators,operands,it);
+                return false;
             }
         }else if(state === "operand" || state === "postfix"){
             if(it = or(parsePostfix, parseBinary)(str)){
                 let token;
+                console.log("!!!.'",str,"'");
                 [str,token] = it;
+                console.log("!!!'",str,"'");
+                console.log(it);
                 if(token.opType === "postfix"){
                     state = "postfix";
                     reduceStack(postfixes.get(token.op).precedence);
                     operators.push(token);
-                    snapshot = takeSnapshot();
                 }else if(token.opType === "binary"){
                     state = "binary";
                     reduceStack(binaries.get(token.op).precedence);
@@ -499,17 +488,17 @@ const parseExpression = function(str){
         }
     }
     reduceStack(-Infinity);
-    return [str,tokens.pop()];
+    return [str,operands.pop()];
 }
 
-const parseStatement = function(str){
+
+const parseMacro = function(str){
     let it;
-    let macro = false;
-    if(!(it = seq(/^#?[A-Za-z_][A-Za-z_0-9]*/)(str)))return false;
-    let id;
-    [str,[id]] = it;
-    let IDK;
-    if(id === "#unroll"){
+    if(!(it = seq("#",reg.id)(str)))return false;
+    let id,_;
+    [str,[_,id]] = it;
+    // id == if || unroll
+    if(id === "unroll"){
         // these expression would have different scope (comptime scope), and evaluated in comptime
         if(!(it = seq("(",reg.id,"in",parseExpression,"..",parseExpression,")")(str)))return false;
         [str,it] = it;
@@ -523,7 +512,7 @@ const parseStatement = function(str){
             type: "#unroll",
             index,min,max,body
         }]
-    }else if(id === "#if" || id === "loop"){
+    }else if(id === "if"){
         if(!(it = seq("(",parseExpression,")")(str)))return false;
         [str,it] = it;
         let cond = it[1];
@@ -531,26 +520,17 @@ const parseStatement = function(str){
         let body;
         [str,body] = it;
         return [str,{
-            type: id,// #if or loop
+            type: "#if",
             cond: cond,
             body: body,
         }];
-    }else if(id === "return"){
-        if(!(it = parseExpression(str)))return false;
-        [str,it] = it;
-        const expr = it;
-        return [str,{
-            type: "return",
-            value: expr,
-        }];
-
     }else{
         return false;
     }
 }
 
 const parseScope = function(str){
-    return parseRepeats("{",/^;?/,"}",or(parseStatement,parseExpression,parseDeclaration))(str);
+    return parseRepeats("{","","}",or(parseDeclaration,parseMacro,parseExpression))(str);
 }
 
 const parseFuncDef = function(str){
@@ -587,7 +567,6 @@ const parseFuncDef = function(str){
     let body;
     [str,body] = it;
     return [str,{
-        type: "funcdef",
         rettype,
         name: funcname,
         args,
@@ -597,16 +576,11 @@ const parseFuncDef = function(str){
     }]
 }
 
-export const parseGlobal = function(str){
-    let res = parseRepeats("","",
+const parseGlobal = function(str){
+    return parseRepeats("","",
         ""
         //or(parseSingleLineComment,parseMultiLineComment,parseSpaceChars)
         ,or(parseTypedefStatement,parseFuncDef))(str);
-    if(!res)return false;
-    return {
-        type: "global",
-        body: res
-    }
 }
 
 // console.log(JSON.stringify(parseGlobal(`
@@ -627,35 +601,32 @@ export const parseGlobal = function(str){
 
 
 
-// console.log(JSON.stringify(parseGlobal(`
-// typedef u8 (char, char, char, char, char, char, char, char)
-// u8 operator + (u8 a, u8 b){
-//      u8 c;
-//      #unroll(i in 0..8){
-//          char acc;
-//          acc += b[i];
-//          loop(acc){
-//              acc--;
-//              loop(acc){
-//                  acc--;
-//                  loop(acc){
-//                      acc--;
-//                      c[i]++;
-//                  }
-//                  c[i]--;
-//                  #if(i != 7){
-//                      c[i+1]++;
-//                  }
-//              }
-//              c[i]++;
-//          }
-//      };
-//      k++;
-//      return c;
-// }
-// `)[1],null,4));
+console.log(JSON.stringify(parseGlobal(`
+typedef u8 (char, char, char, char, char, char, char, char);
+u8 operator + (u8 a, u8 b){
+//     u8 c;
+//     #unroll(i in 0..8){
+//         char acc;
+//         acc += a[i];
+//         acc += b[i];
+//         loop(acc){
+//             acc--;
+//             loop(acc){
+//                 acc--;
+//                 loop(acc){
+//                     acc--;
+//                     c[i]++;
+//                 }
+//                 c[i]--;
+//                 #if(i != 7){
+//                     c[i+1]++;
+//                 }
+//             }
+//             c[i]++;
+//         }
+//     }
+//     return c.slice(0,8);
+}
+`)[1],null,4));
 
 
-//console.log(JSON.stringify((parseExpression)("c.slice(0,8)"),null,4));
-
-//console.log(seq("(",reg.id,"in",parseExpression,"..",parseExpression,")")("(i in 0..8)"));

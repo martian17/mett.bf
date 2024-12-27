@@ -1,0 +1,72 @@
+// Brainfuck IR proposal
+//
+// Elemental macros
+// Macros don't reqire ; at the end
+// 
+// #sft(#int)    series of > or <
+// #in()         ,
+// #out()        .
+// #loop(char){} []
+
+// count in binary forever
+char a = 1;
+#loop(a){
+    char b;
+    ^char c;// allocate to top of stack
+    #loop(c){
+        #sft(+1);
+    }
+    // now c points to 0 cell
+    c++;
+    #sft(-1);
+    #loop(c){
+        c--;
+        #sft(-1);
+    }
+    #sft(+1);
+}
+
+
+
+
+// fibonacci in mett
+
+char fib(char n){
+    if(n == 1){
+        return 1;
+    }else if(n == 2){
+        return 1;
+    }else{
+        return fib(n-1) + fib(n-2);
+    }
+}
+
+char main(){
+    cahr n = 5;
+    char res = fib(n);
+    #out(res);
+    #out(n);
+}
+
+
+// now let's compile it
+char exit = 1;
+^char block = 0;
+#loop(exit){
+    if(block == 0){
+        ^char n = 5;
+        #out(n);
+        block = 1;
+    }else if(){
+    }
+    
+}
+
+
+
+
+
+
+
+
+
